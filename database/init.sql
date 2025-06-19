@@ -84,4 +84,4 @@ CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id)
 
 -- Insert default admin user (email: admin@usasya.com, password: admin123)
 INSERT OR IGNORE INTO users (name, email, password, phone, role, status) 
-VALUES ('System Admin', 'admin@usasya.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/ObvbHjT8rCAdmi7Z6', '+1234567890', 'admin', 'active');
+VALUES ('System Admin', 'admin@usasya.com', '$2a$12$oMB//YVaBJNjsloV3DdUq.VBdDODHHrP48vATM8bFEWXTu/6OG9Mu', '+1234567890', 'admin', 'active');
