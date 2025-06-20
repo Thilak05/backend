@@ -1,9 +1,39 @@
 const express = require('express');
 const { body, validationResult, param } = require('express-validator');
 const { getDb } = require('../database/init');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, optionalAuthenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
+
+// Custom UPI link validator
+const isValidUPILink = (value) => {
+  if (!value) return true; // Optional field
+  
+  // Check if it starts with upi://
+  if (!value.startsWith('upi://')) {
+    return false;
+  }
+  
+  // Basic UPI URL structure validation
+  const upiPattern = /^upi:\/\/pay\?(.+)$/;
+  if (!upiPattern.test(value)) {
+    return false;
+  }
+  
+  // Extract query parameters
+  const queryString = value.split('?')[1];
+  const params = new URLSearchParams(queryString);
+  
+  // Check for required parameters
+  const requiredParams = ['pa']; // pa (payee address) is mandatory
+  for (const param of requiredParams) {
+    if (!params.has(param) || !params.get(param)) {
+      return false;
+    }
+  }
+  
+  return true;
+};
 
 // Validation rules
 const orderValidation = [
@@ -15,6 +45,7 @@ const orderValidation = [
   body('items.*.product_id').isInt({ min: 1 }).withMessage('Valid product ID is required'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1'),
   body('payment_method').optional().isIn(['upi', 'cod', 'online']).withMessage('Invalid payment method'),
+  body('upi_link').optional().custom(isValidUPILink).withMessage('Valid UPI link is required'),
   body('notes').optional().trim()
 ];
 
@@ -212,7 +243,7 @@ router.get('/:id', authenticateToken, idValidation, async (req, res) => {
 });
 
 // Create new order (supports both authenticated and guest users)
-router.post('/', orderValidation, async (req, res) => {
+router.post('/', optionalAuthenticateToken, orderValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -226,6 +257,7 @@ router.post('/', orderValidation, async (req, res) => {
       shipping_address, 
       items, 
       payment_method = 'upi', 
+      upi_link,
       notes 
     } = req.body;
 
@@ -280,9 +312,9 @@ router.post('/', orderValidation, async (req, res) => {
       // Create order
       const orderResult = await new Promise((resolve, reject) => {
         db.run(
-          `INSERT INTO orders (user_id, customer_name, customer_phone, customer_email, total_amount, shipping_address, payment_method, notes, created_at, updated_at) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          [user_id, customer_name, customer_phone, customer_email || null, total_amount, shipping_address, payment_method, notes || null],
+          `INSERT INTO orders (user_id, customer_name, customer_phone, customer_email, total_amount, shipping_address, payment_method, upi_link, notes, created_at, updated_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [user_id, customer_name, customer_phone, customer_email || null, total_amount, shipping_address, payment_method, upi_link || null, notes || null],
           function(err) {
             if (err) reject(err);
             else resolve({ id: this.lastID });
@@ -292,16 +324,16 @@ router.post('/', orderValidation, async (req, res) => {
 
       const order_id = orderResult.id;
 
-      // Generate UPI link if payment method is UPI
-      let upi_link = null;
-      if (payment_method === 'upi') {
-        upi_link = generateUPILink(total_amount, order_id);
+      // Generate UPI link if payment method is UPI and no link provided
+      let final_upi_link = upi_link;
+      if (payment_method === 'upi' && !upi_link) {
+        final_upi_link = generateUPILink(total_amount, order_id);
         
-        // Update order with UPI link
+        // Update order with generated UPI link
         await new Promise((resolve, reject) => {
           db.run(
             'UPDATE orders SET upi_link = ? WHERE id = ?',
-            [upi_link, order_id],
+            [final_upi_link, order_id],
             function(err) {
               if (err) reject(err);
               else resolve();
@@ -413,6 +445,7 @@ router.post('/guest', orderValidation, async (req, res) => {
       shipping_address, 
       items, 
       payment_method = 'upi', 
+      upi_link,
       notes 
     } = req.body;
 
@@ -464,9 +497,9 @@ router.post('/guest', orderValidation, async (req, res) => {
       // Create guest order (user_id is null)
       const orderResult = await new Promise((resolve, reject) => {
         db.run(
-          `INSERT INTO orders (user_id, customer_name, customer_phone, customer_email, total_amount, shipping_address, payment_method, notes, created_at, updated_at) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          [null, customer_name, customer_phone, customer_email || null, total_amount, shipping_address, payment_method, notes || null],
+          `INSERT INTO orders (user_id, customer_name, customer_phone, customer_email, total_amount, shipping_address, payment_method, upi_link, notes, created_at, updated_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [null, customer_name, customer_phone, customer_email || null, total_amount, shipping_address, payment_method, upi_link || null, notes || null],
           function(err) {
             if (err) reject(err);
             else resolve({ id: this.lastID });
@@ -476,16 +509,16 @@ router.post('/guest', orderValidation, async (req, res) => {
 
       const order_id = orderResult.id;
 
-      // Generate UPI link if payment method is UPI
-      let upi_link = null;
-      if (payment_method === 'upi') {
-        upi_link = generateUPILink(total_amount, order_id);
+      // Generate UPI link if payment method is UPI and no link provided
+      let final_upi_link = upi_link;
+      if (payment_method === 'upi' && !upi_link) {
+        final_upi_link = generateUPILink(total_amount, order_id);
         
-        // Update order with UPI link
+        // Update order with generated UPI link
         await new Promise((resolve, reject) => {
           db.run(
             'UPDATE orders SET upi_link = ? WHERE id = ?',
-            [upi_link, order_id],
+            [final_upi_link, order_id],
             function(err) {
               if (err) reject(err);
               else resolve();
@@ -1191,6 +1224,120 @@ router.get('/stats/revenue', authenticateToken, requireAdmin, async (req, res) =
   } catch (error) {
     console.error('Error fetching revenue analytics:', error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Validate cart items (check stock availability)
+router.post('/validate-cart', async (req, res) => {
+  try {
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Items array is required' });
+    }
+
+    const db = getDb();
+    const results = [];
+
+    for (const item of items) {
+      const product = await new Promise((resolve, reject) => {
+        db.get(
+          'SELECT id, name, price, current_stock, status FROM products WHERE id = ?',
+          [item.product_id],
+          (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+          }
+        );
+      });
+
+      const result = {
+        product_id: item.product_id,
+        requested_quantity: item.quantity,
+        available: true,
+        message: 'Available'
+      };
+
+      if (!product) {
+        result.available = false;
+        result.message = 'Product not found';
+        result.current_stock = 0;
+      } else if (product.status !== 'active') {
+        result.available = false;
+        result.message = 'Product is not active';
+        result.current_stock = product.current_stock;
+        result.product_name = product.name;
+      } else if (product.current_stock < item.quantity) {
+        result.available = false;
+        result.message = `Insufficient stock. Available: ${product.current_stock}, Requested: ${item.quantity}`;
+        result.current_stock = product.current_stock;
+        result.product_name = product.name;
+      } else {
+        result.current_stock = product.current_stock;
+        result.product_name = product.name;
+        result.price = product.price;
+      }
+
+      results.push(result);
+    }
+
+    db.close();
+
+    const allAvailable = results.every(item => item.available);
+
+    res.json({
+      valid: allAvailable,
+      items: results,
+      message: allAvailable ? 'All items are available' : 'Some items are not available'
+    });
+
+  } catch (error) {
+    console.error('Error validating cart:', error);
+    res.status(500).json({ error: 'Server error while validating cart' });
+  }
+});
+
+// Get current stock for multiple products
+router.post('/check-stock', async (req, res) => {
+  try {
+    const { product_ids } = req.body;
+
+    if (!product_ids || !Array.isArray(product_ids)) {
+      return res.status(400).json({ error: 'product_ids array is required' });
+    }
+
+    const db = getDb();
+    const placeholders = product_ids.map(() => '?').join(',');
+    
+    const products = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT id, name, current_stock, status FROM products WHERE id IN (${placeholders})`,
+        product_ids,
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        }
+      );
+    });
+
+    db.close();
+
+    const stockInfo = product_ids.map(id => {
+      const product = products.find(p => p.id === id);
+      return {
+        product_id: id,
+        available: product ? product.current_stock > 0 && product.status === 'active' : false,
+        current_stock: product ? product.current_stock : 0,
+        status: product ? product.status : 'not_found',
+        name: product ? product.name : null
+      };
+    });
+
+    res.json({ products: stockInfo });
+
+  } catch (error) {
+    console.error('Error checking stock:', error);
+    res.status(500).json({ error: 'Server error while checking stock' });
   }
 });
 

@@ -763,4 +763,41 @@ router.get('/stats/overview', authenticateToken, requireAdmin, async (req, res) 
   }
 });
 
+// Get current user's profile
+router.get('/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const db = getDb();
+
+    const user = await new Promise((resolve, reject) => {
+      db.get(
+        'SELECT id, name, email, phone, role, status, avatar, created_at, updated_at FROM users WHERE id = ?',
+        [userId],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+
+    if (!user) {
+      db.close();
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Add full avatar URL if avatar exists
+    const responseUser = {
+      ...user,
+      avatar_url: user.avatar ? getFileUrl(req, user.avatar, 'users') : null
+    };
+
+    db.close();
+    res.json(responseUser);
+
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;

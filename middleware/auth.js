@@ -19,6 +19,26 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Optional authentication middleware - doesn't fail if no token provided
+const optionalAuthenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (!token) {
+    // No token provided, continue without setting req.user
+    return next();
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) {
+      // Invalid token, continue without setting req.user
+      return next();
+    }
+    req.user = user;
+    next();
+  });
+};
+
 // Middleware to check if user is admin
 const requireAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') {
@@ -78,6 +98,7 @@ const validateUserExists = async (req, res, next) => {
 
 module.exports = {
   authenticateToken,
+  optionalAuthenticateToken,
   requireAdmin,
   requireOwnershipOrAdmin,
   validateUserExists
